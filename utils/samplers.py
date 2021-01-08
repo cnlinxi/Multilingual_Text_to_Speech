@@ -115,7 +115,7 @@ class PerfectBatchSampler(Sampler):
                 else:
                     batch = batch[:(groups // self._dp_devices) * self._dp_devices * len(self._samplers)]
                     if len(batch) > 0:
-                        yield batch 
+                        yield batch
         
     def __len__(self):
         language_batch_size = self._batch_size // len(self._samplers)

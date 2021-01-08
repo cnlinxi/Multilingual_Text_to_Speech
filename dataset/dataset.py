@@ -1,14 +1,14 @@
 import os
-import numpy as np
-import collections
-import torch
 import random
 
+import numpy as np
+import torch
+
 from dataset import loaders
+from params.params import Params as hp
 from utils import audio
 from utils import text
 from utils.logging import Logger
-from params.params import Params as hp
 
 
 class TextToSpeechDatasetCollection():
@@ -300,7 +300,7 @@ class TextToSpeechCollate():
                 languages = languages[sorted_idxs]
                 # convert a vector of language indices into a vector of one-hots (used as weight vectors for accent control)
                 one_hots = torch.zeros(languages.size(0), languages.size(1), hp.language_number).zero_()
-                languages = one_hot.scatter_(2, languages.data, 1)
+                languages = one_hots.scatter_(2, languages.data, 1)
         else:
             sorted_idxs = range(batch_size)
         

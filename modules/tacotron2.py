@@ -241,7 +241,7 @@ class Tacotron(torch.nn.Module):
         # Encoder transforming graphmenes or phonemes into abstract input representation
         self._encoder = self._get_encoder(hp.encoder_type)
 
-        # Reversal language classifier to make encoder truly languagge independent
+        # Reversal language classifier to make encoder truly language independent
         if hp.reversal_classifier:
             self._reversal_classifier = self._get_adversarial_classifier(hp.reversal_classifier_type)
 
@@ -389,8 +389,10 @@ class Tacotron(torch.nn.Module):
         text.unsqueeze_(0)
 
         if speaker is not None and speaker.dim() == 1:
+            # speaker: [1,text.size(1)]
             speaker = speaker.unsqueeze(1).expand((-1, text.size(1)))
         if language is not None and language.dim() == 1:
+            # language: [language_num*token_num,text.size(1)]
             language = language.unsqueeze(1).expand((-1, text.size(1)))
         
         # encode input

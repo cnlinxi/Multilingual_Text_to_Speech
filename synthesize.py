@@ -50,25 +50,35 @@ def synthesize(model, input_data, force_cpu=False):
 
     t = torch.LongTensor(text.to_sequence(clean_text, use_phonemes=hp.use_phonemes))
 
-    if hp.multi_language:     
+    if hp.multi_language:
+        # item[3]: l1-(len1),l2*0.75:l3*0.25-(len2),l1
+        # l_tokens: list, [l1-(len1),l2*0.75:l3*0.25-(len2),l1]
         l_tokens = item[3].split(',')
         t_length = len(clean_text) + 1
+        # 输出的l为一维向量，长度为language_num(language dim for every token)*token_num
         l = []
         for token in l_tokens:
+            # l_d: [l2*0.75:l3*0.25,(len2)]
             l_d = token.split('-')
- 
+            # language: [0,0,...,0]
             language = [0] * hp.language_number
             for l_cw in l_d[0].split(':'):
+                # l_cw: l2*0.75 / l3*0.25
+                # l_cw_s: list, [l2,0.75]
                 l_cw_s = l_cw.split('*')
                 language[hp.languages.index(l_cw_s[0])] = 1 if len(l_cw_s) == 1 else float(l_cw_s[1])
 
+            # language: [0,0.75,0.25,...,0]
+            # language_length: int, (len2). 指定该语种覆盖的长度，或者默认剩下所有的长度
             language_length = (int(l_d[1]) if len(l_d) == 2 else t_length)
+            # l: list。对每一个token对应一个language: [0,0.75,0.25,...,0]
             l += [language] * language_length
             t_length -= language_length     
         l = torch.FloatTensor([l])
     else:
         l = None
 
+    # s: [int]，仅有一个元素的向量
     s = torch.LongTensor([hp.unique_speakers.index(item[2])]) if hp.multi_speaker else None
 
     if torch.cuda.is_available() and not force_cpu: 
@@ -76,6 +86,8 @@ def synthesize(model, input_data, force_cpu=False):
         if l is not None: l = l.cuda(non_blocking=True)
         if s is not None: s = s.cuda(non_blocking=True)
 
+    # s：仅有一个speaker_id元素的向量
+    # l：元素个数为language_num*token_num的向量
     s = model.inference(t, speaker=s, language=l).cpu().detach().numpy()
     s = audio.denormalize_spectrogram(s, not hp.predict_linear)
 

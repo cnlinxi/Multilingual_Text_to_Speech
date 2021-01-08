@@ -66,7 +66,7 @@ class ConditionalEncoder(torch.nn.Module):
     def forward(self, x, x_lenghts, x_langs):  
         x_langs = torch.argmax(x_langs, dim=2)
         l = self._language_embedding(x_langs)
-        x = torch.cat((x, l), dim=-1) 
+        x = torch.cat((x, l), dim=-1)
         x = self._encoder(x, x_lenghts)
         return x
 

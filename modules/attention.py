@@ -1,6 +1,7 @@
 import torch
 from torch.nn import functional as F
 from torch.nn import Linear, Parameter, Conv1d
+import math
 
 
 class AttentionBase(torch.nn.Module):
@@ -152,5 +153,105 @@ class ForwardAttentionWithTransition(ForwardAttention):
         context, weights = super(ForwardAttentionWithTransition, self).forward(query, memory, mask, None)
         transtition_input = torch.cat([self._prev_context, query, prev_decoder_output], dim=1)
         t_prob = self._transition_agent(transtition_input)
-        self._t_prob = torch.sigmoid(t_prob) 
+        self._t_prob = torch.sigmoid(t_prob)
         return context, weights
+
+
+class LinearNorm(torch.nn.Module):
+    def __init__(self, in_dim, out_dim, bias=True, w_init_gain='linear'):
+        super(LinearNorm, self).__init__()
+        self.linear_layer = torch.nn.Linear(in_dim, out_dim, bias=bias)
+        torch.nn.init.xavier_normal_(self.linear_layer.weight,
+                                     gain=torch.nn.init.calculate_gain(w_init_gain))
+
+    def forward(self, x):
+        return self.linear_layer(x)
+
+
+class SMAAttention(torch.nn.Module):
+    def __init__(self, representation_dim, query_dim, memory_dim, sigmoid_noise=2.0,
+                 sigmoid_noise_seed=None, score_bias_init=3.5, mode='parallel'):
+        '''
+        Arguments:
+        representation_dim -- size of the hidden representation
+        query_dim -- size of the attention query input (probably decoder hidden state)
+        memory_dim -- size of the attention memory input (probably encoder outputs)
+        '''
+        super(SMAAttention, self).__init__()
+        self.query_layer = LinearNorm(query_dim, representation_dim, bias=False, w_init_gain='tanh')
+        self.memory_layer = LinearNorm(memory_dim, representation_dim, bias=False, w_init_gain='tanh')
+
+        v = torch.empty(representation_dim)
+        torch.nn.init.uniform_(v)
+        self.v = torch.nn.Parameter(v)
+        self.register_parameter('attention_v', self.v)
+
+        g = torch.ones(representation_dim) * math.sqrt(1. / representation_dim)
+        self.g = torch.nn.Parameter(g)
+        self.register_parameter('attention_g', self.g)
+
+        b = torch.zeros(representation_dim)
+        self.b = torch.nn.Parameter(b)
+        self.register_parameter('attention_b', self.b)
+
+        self.score_mask_value = -float('inf')
+        self.sigmoid_noise = sigmoid_noise
+        self.sigmoid_noise_seed = sigmoid_noise_seed
+
+        self.mode = mode
+
+    def get_alignment_energies(self, query, processed_memory):
+        '''
+        query: decoder output [batch_size,attention_rnn_dim]
+        processed_memory: processed encoder outputs [batch_size,seq_len,attention_dim]
+
+        RETURNS
+        alignment [batch_size,max_time]
+        '''
+        processed_query = self.query_layer(query)
+        normed_v = self.g * self.v * torch.rsqrt(torch.sum(torch.pow(self.v, 2)))
+        energies = torch.sum(normed_v * (torch.tanh(processed_query + processed_memory + self.b)), dim=2)
+        energies = energies.squeeze(-1)
+        return energies
+
+    def forward(self, attention_hidden_state, memory, processed_memory, prev_attention, mask):
+        '''
+        attention_hidden_state: attention rnn last output
+        memory: encoder outputs
+        processed_memory: processed encoder outputs
+        prev_attention: previous attention weights
+        mask: binary mask for padded data
+        '''
+        prev_attention = prev_attention.float()
+        alignment = self.get_alignment_energies(attention_hidden_state, processed_memory)
+        if self.sigmoid_noise > 0:
+            noise = torch.randn(alignment.size(), dtype=alignment.dtype, device=alignment.device)
+            alignment += self.sigmoid_noise * noise
+
+        if self.mode == 'hard':
+            p_choose_i = torch.gt(alignment, 0).type(alignment.dtype)
+        else:
+            p_choose_i = torch.sigmoid(alignment)
+
+        if self.mode == 'parallel':
+            pad = torch.zeros([p_choose_i.size(0), 1], dtype=p_choose_i.dtype, device=p_choose_i.device)
+            attention_weights = prev_attention * p_choose_i + \
+                                torch.cat(
+                                    (pad, prev_attention[:, :-1] * (1. - p_choose_i[:, :-1])),
+                                    1)
+        elif self.mode == 'hard':
+            move_next_mask = torch.cat(
+                (torch.zeros_like(prev_attention[:, :1]), prev_attention[:, :-1]),
+                1
+            )
+            stay_prob = torch.sum(p_choose_i * prev_attention.type(alignment.dtype), 1)
+            stay_prob = stay_prob.unsqueeze(1)
+            attention_weights = torch.where(stay_prob > 0.5, prev_attention, move_next_mask).float()
+
+        else:
+            raise ValueError('mode must be `parallel` or `hard`')
+
+        attention_context = torch.bmm(attention_weights.unsqueeze(1), memory)
+        attention_context = attention_context.squeeze(1)
+
+        return attention_context, attention_weights
